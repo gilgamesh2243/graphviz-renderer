@@ -1,3 +1,6 @@
+
+![App Screenshot](./Screenshot%202025-08-12%20at%2011.11.06%E2%80%AFPM.png)
+
 # Multi-Company Graph Manager
 
 A fast, local-first graph visualization tool for managing multiple clients and their graphs. Built with React, Vite, TypeScript, Cytoscape, and Monaco Editor.
