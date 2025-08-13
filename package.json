@@ -1,0 +1,10 @@
+{
+  "name": "graphvis-root",
+  "private": true,
+  "workspaces": ["apps/graph"],
+  "scripts": {
+    "graph:dev": "npm --workspace @app/graph run dev",
+    "graph:build": "npm --workspace @app/graph run build",
+    "graph:preview": "npm --workspace @app/graph run preview"
+  }
+}
