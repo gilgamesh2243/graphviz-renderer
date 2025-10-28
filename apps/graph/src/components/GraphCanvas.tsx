@@ -12,9 +12,10 @@ interface GraphCanvasProps {
   viewport?: { zoom:number; pan:{ x:number; y:number } };
   onPositions: (p: Record<string, { x: number; y: number }>) => void;
   cyRef: React.MutableRefObject<Core | null>;
+  autoLayoutOnLoad?: boolean;
 }
 
-export const GraphCanvas: React.FC<GraphCanvasProps> = ({ elements, positions, viewport, onPositions, cyRef }) => {
+export const GraphCanvas: React.FC<GraphCanvasProps> = ({ elements, positions, viewport, onPositions, cyRef, autoLayoutOnLoad = true }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const initialLayoutDoneRef = useRef(false);
   // Track whether we've already applied the persisted viewport for the current element set
@@ -55,8 +56,8 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({ elements, positions, v
       if(positionsCompleteAfterAdd){
         // We'll apply the stored viewport in a dedicated effect after this rebuild; mark as not yet applied.
         viewportAppliedRef.current = false;
-      } else {
-        // need layout (no saved positions yet)
+      } else if(autoLayoutOnLoad) {
+        // need layout (no saved positions yet) - only auto-layout if enabled
         cy.layout({
           name:'elk',
           elk:{ algorithm:'layered','elk.direction':'RIGHT',
@@ -75,7 +76,7 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({ elements, positions, v
       }
       if(elements.nodes.length===0) initialLayoutDoneRef.current = false;
     });
-  }, [elements]);
+  }, [elements, autoLayoutOnLoad]);
 
   // Apply external position updates (drag/save) without rebuild
   useEffect(()=>{
