@@ -18,14 +18,14 @@ A fast, local-first graph visualization tool for managing multiple clients and t
 
 ## Quick Start
 
-### Local Development (In-Memory Database)
+### Local Development (localStorage)
 ```bash
 npm install
 npm run graph:dev
 ```
 Visit `http://localhost:5173` (or as shown in terminal).
 
-The app will use an in-memory SQLite database by default, which is perfect for local development and testing.
+The app will use localStorage by default for local development, which works entirely in your browser with no external dependencies.
 
 ### Production Setup with Turso
 
@@ -101,15 +101,16 @@ apps/
 
 This application supports two storage modes:
 
-1. **In-Memory SQLite** (Default for local development)
+1. **localStorage** (Default for local development)
    - No configuration needed
-   - Data is reset on page refresh
+   - Data persists in browser localStorage
    - Perfect for testing and development
+   - Works entirely in the browser
 
 2. **Turso Database** (Recommended for production)
    - Cloud-based persistence
    - Automatic data migration from localStorage
-   - Shared access across devices
+   - Shared access across devices and users
    - Configure via environment variables
 
 ## License

@@ -54,19 +54,17 @@ export default function App() {
       
       if (dbUrl) {
         // Initialize Turso database
-        initializeDatabase(dbUrl, dbToken);
-        await setupTables();
-        
-        // Migrate from localStorage if not already done
-        if (!isDatabaseMode()) {
-          await migrateToDatabase();
+        const dbClient = initializeDatabase(dbUrl, dbToken);
+        if (dbClient) {
+          await setupTables();
+          
+          // Migrate from localStorage if not already done
+          if (!isDatabaseMode()) {
+            await migrateToDatabase();
+          }
         }
-      } else {
-        // Use in-memory database for local development
-        initializeDatabase();
-        await setupTables();
-        setDatabaseMode(true);
       }
+      // If no URL provided, use localStorage mode (database mode stays false)
       
       let cs = await resolveResult(clients.list());
       if (cs.length === 0) {

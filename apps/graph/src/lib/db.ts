@@ -3,18 +3,17 @@ import { Client, GraphDoc, ID } from './models';
 
 let db: LibsqlClient | null = null;
 
-export function initializeDatabase(url?: string, authToken?: string): LibsqlClient {
-  // If no URL provided, use in-memory database for local development
+export function initializeDatabase(url?: string, authToken?: string): LibsqlClient | null {
+  // Only initialize database if URL is provided (Turso mode)
+  // Without URL, we'll use localStorage mode
   if (!url) {
-    db = createClient({
-      url: ':memory:'
-    });
-  } else {
-    db = createClient({
-      url,
-      authToken
-    });
+    return null;
   }
+  
+  db = createClient({
+    url,
+    authToken
+  });
   return db;
 }
 
