@@ -22,6 +22,7 @@ export default function App() {
   const [text, setText] = useState<string>('');
   const [elements, setElements] = useState<any>({ nodes: [], edges: [] });
   const [positions, setPositions] = useState<Record<string, { x: number, y: number }>>({});
+  const [parseError, setParseError] = useState<string | null>(null);
 
   // org / graphs
   const [clientList, setClientList] = useState<Client[]>([]);
@@ -34,6 +35,9 @@ export default function App() {
   const [autoLayoutOnLoad, setAutoLayoutOnLoad] = useState<boolean>(ui.getAutoLayout());
   const containerRef = useRef<HTMLDivElement | null>(null);
   const skipNextPositionsPersist = useRef(false);
+  
+  // Keep track of last valid elements to restore on parse error
+  const lastValidElements = useRef<any>({ nodes: [], edges: [] });
 
   // bootstrap (clients + graphs + initial text)
   useEffect(() => {
@@ -64,7 +68,13 @@ export default function App() {
     const initialPos = currentGraph?.positions ?? shared?.positions ?? {};
     setText(initialText);
     setPositions(initialPos);
-    setElements(parseInput(initialText));
+    const parsed = parseInput(initialText);
+    setElements(parsed);
+    if (parsed.error) {
+      setParseError(parsed.error);
+    } else {
+      lastValidElements.current = parsed;
+    }
     if (shared && !currentGraph?.text) window.location.hash = '';
   }, []);
 
@@ -78,11 +88,21 @@ export default function App() {
     if (gs[0]) {
       setText(gs[0].text);
       setPositions(gs[0].positions || {});
-      setElements(parseInput(gs[0].text));
+      const parsed = parseInput(gs[0].text);
+      setElements(parsed);
+      if (parsed.error) {
+        setParseError(parsed.error);
+      } else {
+        setParseError(null);
+        lastValidElements.current = parsed;
+      }
     } else {
       setText(DEFAULT_TEXT);
       setPositions({});
-      setElements(parseInput(DEFAULT_TEXT));
+      const parsed = parseInput(DEFAULT_TEXT);
+      setElements(parsed);
+      setParseError(null);
+      lastValidElements.current = parsed;
     }
   };
 
@@ -95,18 +115,39 @@ export default function App() {
   skipNextPositionsPersist.current = true; // avoid writing back immediately with identical data
     setText(g.text);
     setPositions(g.positions || {});
-    setElements(parseInput(g.text));
+    const parsed = parseInput(g.text);
+    setElements(parsed);
+    if (parsed.error) {
+      setParseError(parsed.error);
+    } else {
+      setParseError(null);
+      lastValidElements.current = parsed;
+    }
   }, [graphId]);
 
   // edit text → reparse, prune positions, persist
   const onChange = useCallback((val: string) => {
     setText(val);
     const parsed = parseInput(val);
-    setElements(parsed);
-    setPositions(prev => {
-      const keep = new Set(parsed.nodes.map(n => n.id));
-      const next: any = {}; for (const k in prev) if (keep.has(k)) next[k] = prev[k]; return next;
-    });
+    
+    // If parsing fails, show error but keep last valid visualization
+    if (parsed.error) {
+      setParseError(parsed.error);
+      // Keep the last valid elements displayed so graph doesn't disappear
+      setElements(lastValidElements.current);
+    } else {
+      setParseError(null);
+      setElements(parsed);
+      lastValidElements.current = parsed;
+      
+      // Only update positions and persist if parsing succeeded
+      setPositions(prev => {
+        const keep = new Set(parsed.nodes.map(n => n.id));
+        const next: any = {}; for (const k in prev) if (keep.has(k)) next[k] = prev[k]; return next;
+      });
+    }
+    
+    // Always persist text changes (even with errors) so user doesn't lose work
     if (graphId) {
       const g = graphs.get(graphId); if (g) { g.text = val; g.updatedAt = now(); graphs.upsert(g); setGraphList(graphs.listByClient(g.clientId)); }
     }
@@ -173,7 +214,14 @@ export default function App() {
     skipNextPositionsPersist.current = true; // avoid immediate re-persist
     setText(g.text);
     setPositions(g.positions || {});
-    setElements(parseInput(g.text));
+    const parsed = parseInput(g.text);
+    setElements(parsed);
+    if (parsed.error) {
+      setParseError(parsed.error);
+    } else {
+      setParseError(null);
+      lastValidElements.current = parsed;
+    }
     // restore viewport if saved
     const cy = cyRef.current; if(cy && g.viewport){ cy.zoom(g.viewport.zoom); cy.pan(g.viewport.pan); }
   }, [graphId]);
@@ -300,6 +348,32 @@ export default function App() {
         <GraphCanvas elements={elements} positions={positions} viewport={graphId ? graphs.get(graphId)?.viewport : undefined} onPositions={(p) => setPositions(p)} cyRef={cyRef} />
       </div>
       <Toast show={saved} text="Saved" />
+      {parseError && (
+        <div style={{
+          position: 'fixed',
+          bottom: '20px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          background: '#ef4444',
+          color: 'white',
+          padding: '12px 24px',
+          borderRadius: '8px',
+          boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)',
+          maxWidth: '600px',
+          zIndex: 1000,
+          display: 'flex',
+          alignItems: 'center',
+          gap: '12px'
+        }}>
+          <span style={{ fontSize: '18px' }}>⚠️</span>
+          <div>
+            <strong>Parse Error:</strong> {parseError}
+            <div style={{ fontSize: '12px', marginTop: '4px', opacity: 0.9 }}>
+              Fix the syntax to update the visualization
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
