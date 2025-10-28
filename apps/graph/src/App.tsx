@@ -35,6 +35,7 @@ export default function App() {
   const [clientId, setClientId] = useState<string | null>(null);
   const [graphList, setGraphList] = useState<GraphDoc[]>([]);
   const [graphId, setGraphId] = useState<string | null>(null);
+  const [viewport, setViewport] = useState<{ zoom: number; pan: { x: number; y: number } } | undefined>(undefined);
 
   const cyRef = useRef<Core | null>(null);
   const [saved, setSaved] = useState(false);
@@ -150,6 +151,7 @@ export default function App() {
     skipNextPositionsPersist.current = true; // avoid writing back immediately with identical data
       setText(g.text);
       setPositions(g.positions || {});
+      setViewport(g.viewport);
       const parsed = parseInput(g.text);
       setElements(parsed);
       if (parsed.error) {
@@ -271,6 +273,7 @@ export default function App() {
     skipNextPositionsPersist.current = true; // avoid immediate re-persist
     setText(g.text);
     setPositions(g.positions || {});
+    setViewport(g.viewport);
     const parsed = parseInput(g.text);
     setElements(parsed);
     if (parsed.error) {
@@ -433,7 +436,7 @@ export default function App() {
   toolbar={<Toolbar onLayout={onLayout} onShare={onShare} onExportPNG={onExportPNG} onExportSVG={onExportSVG} onRefresh={onRefresh} onSave={saveNow} onZoomIn={onZoomIn} onZoomOut={onZoomOut} onFit={onFit} onFullscreen={onFullscreen} autoLayout={autoLayoutOnLoad} onToggleAutoLayout={toggleAutoLayout} />}
       />
       <div style={{ flex: '1 1 0%', minWidth: 0 }}>
-        <GraphCanvas elements={elements} positions={positions} viewport={graphId ? graphs.get(graphId)?.viewport : undefined} onPositions={(p) => setPositions(p)} cyRef={cyRef} />
+        <GraphCanvas elements={elements} positions={positions} viewport={viewport} onPositions={(p) => setPositions(p)} cyRef={cyRef} autoLayoutOnLoad={autoLayoutOnLoad} />
       </div>
       <Toast show={saved} text="Saved" />
       {parseError && (
