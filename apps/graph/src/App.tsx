@@ -64,7 +64,9 @@ export default function App() {
           }
         }
       }
-      // If no URL provided, use localStorage mode (database mode stays false)
+      // If no Turso URL is provided, the application will use localStorage for persistence.
+      // This is the default mode for local development and works entirely in the browser
+      // without requiring any external database setup. Data persists in browser localStorage.
       
       let cs = await resolveResult(clients.list());
       if (cs.length === 0) {

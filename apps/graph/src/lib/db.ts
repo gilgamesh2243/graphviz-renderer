@@ -3,6 +3,16 @@ import { Client, GraphDoc, ID } from './models';
 
 let db: LibsqlClient | null = null;
 
+/**
+ * Initialize the Turso database connection.
+ * 
+ * @param url - Optional Turso database URL (e.g., libsql://your-database.turso.io)
+ * @param authToken - Optional Turso authentication token
+ * @returns LibsqlClient instance if URL is provided, null otherwise (falls back to localStorage mode)
+ * 
+ * Note: When null is returned, the application will use localStorage for persistence.
+ * This is the default behavior for local development when no Turso configuration is provided.
+ */
 export function initializeDatabase(url?: string, authToken?: string): LibsqlClient | null {
   // Only initialize database if URL is provided (Turso mode)
   // Without URL, we'll use localStorage mode
