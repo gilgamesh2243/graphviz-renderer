@@ -27,7 +27,8 @@ Thumbs.db
 
 # Env
 .env
-.env.*
+.env.local
+.env.*.local
 
 # Misc
 coverage/

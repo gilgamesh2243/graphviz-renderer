@@ -15,7 +15,11 @@ function hash(s: string) {
 
 export function parseDot(src: string): ParsedResult {
   let g: graphlib.Graph | null = null;
-  try { g = read(src); } catch { return { nodes: [], edges: [] }; }
+  try { 
+    g = read(src); 
+  } catch (err) { 
+    throw new Error(`Invalid DOT syntax: ${err instanceof Error ? err.message : 'parse error'}`);
+  }
 
   const nodes = g.nodes().map((id: string) => {
     const a: any = g!.node(id) || {};

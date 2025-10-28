@@ -6,10 +6,16 @@ import { ClientsSidebar } from './components/ClientsSidebar';
 import { GraphsSidebar } from './components/GraphsSidebar';
 import { parseInput } from './lib/normalize';
 import { decodeShare, encodeShare } from './lib/share';
-import { clients, graphs, id, now, ui } from './lib/store';
+import { clients, graphs, id, now, ui, isDatabaseMode, setDatabaseMode, migrateToDatabase } from './lib/store';
+import { initializeDatabase, setupTables } from './lib/db';
 import { Client, GraphDoc } from './lib/models';
 import type { Core } from 'cytoscape';
 import { Toast } from './components/Toast';
+
+// Helper to handle both sync and async operations
+async function resolveResult<T>(result: T | Promise<T>): Promise<T> {
+  return result instanceof Promise ? await result : result;
+}
 
 const DEFAULT_TEXT = `digraph G {
   User -> IPLocation [label="USED"];
@@ -22,6 +28,7 @@ export default function App() {
   const [text, setText] = useState<string>('');
   const [elements, setElements] = useState<any>({ nodes: [], edges: [] });
   const [positions, setPositions] = useState<Record<string, { x: number, y: number }>>({});
+  const [parseError, setParseError] = useState<string | null>(null);
 
   // org / graphs
   const [clientList, setClientList] = useState<Client[]>([]);
@@ -34,81 +41,165 @@ export default function App() {
   const [autoLayoutOnLoad, setAutoLayoutOnLoad] = useState<boolean>(ui.getAutoLayout());
   const containerRef = useRef<HTMLDivElement | null>(null);
   const skipNextPositionsPersist = useRef(false);
+  
+  // Keep track of last valid elements to restore on parse error
+  const lastValidElements = useRef<any>({ nodes: [], edges: [] });
 
   // bootstrap (clients + graphs + initial text)
   useEffect(() => {
-    let cs = clients.list();
-    if (cs.length === 0) {
-      const c: Client = { id: id(), name: 'Acme', slug: 'acme', createdAt: now(), updatedAt: now() };
-      clients.upsert(c); cs = [c];
-      const g: GraphDoc = { id: id(), clientId: c.id, name: 'Getting Started', text: DEFAULT_TEXT, positions: {}, createdAt: now(), updatedAt: now() };
-      graphs.upsert(g);
-    }
-    setClientList(cs);
-    const remembered = ui.getActive();
-    const activeClientId = remembered.clientId && cs.find(x => x.id === remembered.clientId)
-      ? remembered.clientId!
-      : cs[0].id;
-    setClientId(activeClientId);
-    const gs = graphs.listByClient(activeClientId);
-    setGraphList(gs);
-    const activeGraphId = remembered.graphId && gs.find(x => x.id === remembered.graphId)
-      ? remembered.graphId!
-      : (gs[0]?.id ?? null);
-    setGraphId(activeGraphId);
+    const bootstrap = async () => {
+      // Initialize database if URL is provided via environment variable
+      const dbUrl = import.meta.env.VITE_TURSO_DATABASE_URL;
+      const dbToken = import.meta.env.VITE_TURSO_AUTH_TOKEN;
+      
+      if (dbUrl) {
+        // Initialize Turso database
+        const dbClient = initializeDatabase(dbUrl, dbToken);
+        if (dbClient) {
+          await setupTables();
+          
+          // Migrate from localStorage if not already done
+          if (!isDatabaseMode()) {
+            await migrateToDatabase();
+          }
+        }
+      }
+      // If no Turso URL is provided, the application will use localStorage for persistence.
+      // This is the default mode for local development and works entirely in the browser
+      // without requiring any external database setup. Data persists in browser localStorage.
+      
+      let cs = await resolveResult(clients.list());
+      if (cs.length === 0) {
+        const c: Client = { id: id(), name: 'Acme', slug: 'acme', createdAt: now(), updatedAt: now() };
+        await resolveResult(clients.upsert(c)); 
+        cs = [c];
+        const g: GraphDoc = { id: id(), clientId: c.id, name: 'Getting Started', text: DEFAULT_TEXT, positions: {}, createdAt: now(), updatedAt: now() };
+        await resolveResult(graphs.upsert(g));
+      }
+      setClientList(cs);
+      const remembered = ui.getActive();
+      const activeClientId = remembered.clientId && cs.find(x => x.id === remembered.clientId)
+        ? remembered.clientId!
+        : cs[0].id;
+      setClientId(activeClientId);
+      const gs = await resolveResult(graphs.listByClient(activeClientId));
+      setGraphList(gs);
+      const activeGraphId = remembered.graphId && gs.find(x => x.id === remembered.graphId)
+        ? remembered.graphId!
+        : (gs[0]?.id ?? null);
+      setGraphId(activeGraphId);
 
-    const shared = decodeShare();
-    const currentGraph = activeGraphId ? graphs.get(activeGraphId) : null;
-    // prefer saved graph; fall back to shared; clear hash if only shared used
-    const initialText = currentGraph?.text ?? shared?.text ?? DEFAULT_TEXT;
-    const initialPos = currentGraph?.positions ?? shared?.positions ?? {};
-    setText(initialText);
-    setPositions(initialPos);
-    setElements(parseInput(initialText));
-    if (shared && !currentGraph?.text) window.location.hash = '';
+      const shared = decodeShare();
+      const currentGraph = activeGraphId ? await resolveResult(graphs.get(activeGraphId)) : null;
+      // prefer saved graph; fall back to shared; clear hash if only shared used
+      const initialText = currentGraph?.text ?? shared?.text ?? DEFAULT_TEXT;
+      const initialPos = currentGraph?.positions ?? shared?.positions ?? {};
+      setText(initialText);
+      setPositions(initialPos);
+      const parsed = parseInput(initialText);
+      setElements(parsed);
+      if (parsed.error) {
+        setParseError(parsed.error);
+      } else {
+        lastValidElements.current = parsed;
+      }
+      if (shared && !currentGraph?.text) window.location.hash = '';
+    };
+    
+    bootstrap().catch(err => {
+      console.error('Failed to bootstrap app:', err);
+      setParseError('Failed to initialize application: ' + err.message);
+    });
   }, []);
 
   // switching client loads its graphs
-  const onSelectClient = (idStr: string) => {
+  const onSelectClient = async (idStr: string) => {
     setClientId(idStr);
     ui.setActive(idStr, null);
-    const gs = graphs.listByClient(idStr);
+    const gs = await resolveResult(graphs.listByClient(idStr));
     setGraphList(gs);
     setGraphId(gs[0]?.id ?? null);
     if (gs[0]) {
       setText(gs[0].text);
       setPositions(gs[0].positions || {});
-      setElements(parseInput(gs[0].text));
+      const parsed = parseInput(gs[0].text);
+      setElements(parsed);
+      if (parsed.error) {
+        setParseError(parsed.error);
+      } else {
+        setParseError(null);
+        lastValidElements.current = parsed;
+      }
     } else {
       setText(DEFAULT_TEXT);
       setPositions({});
-      setElements(parseInput(DEFAULT_TEXT));
+      const parsed = parseInput(DEFAULT_TEXT);
+      setElements(parsed);
+      setParseError(null);
+      lastValidElements.current = parsed;
     }
   };
 
   // switching graph loads its content
   useEffect(() => {
-    if (!graphId) return;
-    if (clientId) ui.setActive(clientId, graphId);
-    const g = graphs.get(graphId);
-    if (!g) return;
-  skipNextPositionsPersist.current = true; // avoid writing back immediately with identical data
-    setText(g.text);
-    setPositions(g.positions || {});
-    setElements(parseInput(g.text));
-  }, [graphId]);
+    const loadGraph = async () => {
+      if (!graphId) return;
+      if (clientId) ui.setActive(clientId, graphId);
+      const g = await resolveResult(graphs.get(graphId));
+      if (!g) return;
+    skipNextPositionsPersist.current = true; // avoid writing back immediately with identical data
+      setText(g.text);
+      setPositions(g.positions || {});
+      const parsed = parseInput(g.text);
+      setElements(parsed);
+      if (parsed.error) {
+        setParseError(parsed.error);
+      } else {
+        setParseError(null);
+        lastValidElements.current = parsed;
+      }
+    };
+    
+    loadGraph().catch(err => {
+      console.error('Failed to load graph:', err);
+      setParseError('Failed to load graph: ' + err.message);
+    });
+  }, [graphId, clientId]);
 
   // edit text → reparse, prune positions, persist
   const onChange = useCallback((val: string) => {
     setText(val);
     const parsed = parseInput(val);
-    setElements(parsed);
-    setPositions(prev => {
-      const keep = new Set(parsed.nodes.map(n => n.id));
-      const next: any = {}; for (const k in prev) if (keep.has(k)) next[k] = prev[k]; return next;
-    });
+    
+    // If parsing fails, show error but keep last valid visualization
+    if (parsed.error) {
+      setParseError(parsed.error);
+      // Keep the last valid elements displayed so graph doesn't disappear
+      setElements(lastValidElements.current);
+    } else {
+      setParseError(null);
+      setElements(parsed);
+      lastValidElements.current = parsed;
+      
+      // Only update positions and persist if parsing succeeded
+      setPositions(prev => {
+        const keep = new Set(parsed.nodes.map(n => n.id));
+        const next: any = {}; for (const k in prev) if (keep.has(k)) next[k] = prev[k]; return next;
+      });
+    }
+    
+    // Always persist text changes (even with errors) so user doesn't lose work
     if (graphId) {
-      const g = graphs.get(graphId); if (g) { g.text = val; g.updatedAt = now(); graphs.upsert(g); setGraphList(graphs.listByClient(g.clientId)); }
+      (async () => {
+        const g = await resolveResult(graphs.get(graphId));
+        if (g) {
+          g.text = val;
+          g.updatedAt = now();
+          await resolveResult(graphs.upsert(g));
+          const updatedList = await resolveResult(graphs.listByClient(g.clientId));
+          setGraphList(updatedList);
+        }
+      })().catch(err => console.error('Failed to save graph:', err));
     }
   }, [graphId]);
 
@@ -119,10 +210,16 @@ export default function App() {
       skipNextPositionsPersist.current = false;
       return;
     }
-    const g = graphs.get(graphId); if (!g) return;
-    g.positions = positions; g.updatedAt = now();
-    graphs.upsert(g);
-    setGraphList(graphs.listByClient(g.clientId));
+    
+    (async () => {
+      const g = await resolveResult(graphs.get(graphId));
+      if (!g) return;
+      g.positions = positions;
+      g.updatedAt = now();
+      await resolveResult(graphs.upsert(g));
+      const updatedList = await resolveResult(graphs.listByClient(g.clientId));
+      setGraphList(updatedList);
+    })().catch(err => console.error('Failed to update positions:', err));
   }, [positions, graphId]);
 
   // canvas layout & exports (keep existing behavior)
@@ -167,20 +264,29 @@ export default function App() {
   }, []);
 
   // Reload graph data & positions from persisted store (discarding unsaved editor changes / drag moves)
-  const onRefresh = useCallback(() => {
+  const onRefresh = useCallback(async () => {
     if(!graphId) return;
-    const g = graphs.get(graphId); if(!g) return;
+    const g = await resolveResult(graphs.get(graphId));
+    if(!g) return;
     skipNextPositionsPersist.current = true; // avoid immediate re-persist
     setText(g.text);
     setPositions(g.positions || {});
-    setElements(parseInput(g.text));
+    const parsed = parseInput(g.text);
+    setElements(parsed);
+    if (parsed.error) {
+      setParseError(parsed.error);
+    } else {
+      setParseError(null);
+      lastValidElements.current = parsed;
+    }
     // restore viewport if saved
     const cy = cyRef.current; if(cy && g.viewport){ cy.zoom(g.viewport.zoom); cy.pan(g.viewport.pan); }
   }, [graphId]);
 
-  const saveNow = useCallback(() => {
+  const saveNow = useCallback(async () => {
     if (!graphId) return;
-    const g = graphs.get(graphId); if (!g) return;
+    const g = await resolveResult(graphs.get(graphId));
+    if (!g) return;
     const cy = cyRef.current as any;
     const pos: Record<string, { x: number, y: number }> = {};
     if (cy) {
@@ -191,57 +297,87 @@ export default function App() {
     // always assign (ensures fresh snapshot even if empty or during race conditions)
     g.positions = pos;
     g.updatedAt = now();
-    graphs.upsert(g);
-    setGraphList(graphs.listByClient(g.clientId));
+    await resolveResult(graphs.upsert(g));
+    const updatedList = await resolveResult(graphs.listByClient(g.clientId));
+    setGraphList(updatedList);
     setSaved(true); window.setTimeout(() => setSaved(false), 900);
   }, [graphId, text]);
 
   // client CRUD
-  const newClient = () => {
+  const newClient = async () => {
     const name = prompt('Client name?'); if (!name) return;
     const c: Client = { id: id(), name, slug: name.toLowerCase().replace(/\s+/g, '-'), createdAt: now(), updatedAt: now() };
-    clients.upsert(c); setClientList(clients.list()); onSelectClient(c.id);
+    await resolveResult(clients.upsert(c));
+    const updatedClients = await resolveResult(clients.list());
+    setClientList(updatedClients);
+    await onSelectClient(c.id);
     const g: GraphDoc = { id: id(), clientId: c.id, name: 'New Graph', text: DEFAULT_TEXT, positions: {}, createdAt: now(), updatedAt: now() };
-    graphs.upsert(g); setGraphList(graphs.listByClient(c.id)); setGraphId(g.id);
+    await resolveResult(graphs.upsert(g));
+    const updatedGraphs = await resolveResult(graphs.listByClient(c.id));
+    setGraphList(updatedGraphs);
+    setGraphId(g.id);
   };
-  const renameClient = () => {
-    if (!clientId) return; const c = clients.list().find(x => x.id === clientId); if (!c) return;
+  const renameClient = async () => {
+    if (!clientId) return;
+    const allClients = await resolveResult(clients.list());
+    const c = allClients.find(x => x.id === clientId);
+    if (!c) return;
     const name = prompt('Rename client', c.name); if (!name) return;
-    clients.upsert({ ...c, name, slug: name.toLowerCase().replace(/\s+/g, '-'), updatedAt: now() });
-    setClientList(clients.list());
+    await resolveResult(clients.upsert({ ...c, name, slug: name.toLowerCase().replace(/\s+/g, '-'), updatedAt: now() }));
+    const updatedClients = await resolveResult(clients.list());
+    setClientList(updatedClients);
   };
-  const deleteClient = () => {
+  const deleteClient = async () => {
     if (!clientId) return; if (!confirm('Delete client and all graphs?')) return;
     // remove graphs for this client
-    graphs.listByClient(clientId).forEach(g => graphs.remove(g.id));
-    clients.remove(clientId);
-    const cs = clients.list(); setClientList(cs);
-    if (cs[0]) onSelectClient(cs[0].id); else { setClientId(null); setGraphList([]); setGraphId(null); }
+    const clientGraphs = await resolveResult(graphs.listByClient(clientId));
+    for (const g of clientGraphs) {
+      await resolveResult(graphs.remove(g.id));
+    }
+    await resolveResult(clients.remove(clientId));
+    const cs = await resolveResult(clients.list());
+    setClientList(cs);
+    if (cs[0]) await onSelectClient(cs[0].id); else { setClientId(null); setGraphList([]); setGraphId(null); }
   };
 
   // graph CRUD
-  const newGraph = () => {
+  const newGraph = async () => {
     if (!clientId) return;
     const name = prompt('Graph name?', 'Untitled') || 'Untitled';
     const g: GraphDoc = { id: id(), clientId, name, text: DEFAULT_TEXT, positions: {}, createdAt: now(), updatedAt: now() };
-    graphs.upsert(g); setGraphList(graphs.listByClient(clientId)); setGraphId(g.id);
+    await resolveResult(graphs.upsert(g));
+    const updatedGraphs = await resolveResult(graphs.listByClient(clientId));
+    setGraphList(updatedGraphs);
+    setGraphId(g.id);
   };
-  const renameGraph = () => {
-    if (!graphId) return; const g = graphs.get(graphId); if (!g) return;
+  const renameGraph = async () => {
+    if (!graphId) return;
+    const g = await resolveResult(graphs.get(graphId));
+    if (!g) return;
     const name = prompt('Rename graph', g.name); if (!name) return;
-    g.name = name; g.updatedAt = now(); graphs.upsert(g);
-    setGraphList(graphs.listByClient(g.clientId));
+    g.name = name; g.updatedAt = now();
+    await resolveResult(graphs.upsert(g));
+    const updatedGraphs = await resolveResult(graphs.listByClient(g.clientId));
+    setGraphList(updatedGraphs);
   };
-  const duplicateGraph = () => {
-    if (!graphId) return; const g = graphs.get(graphId); if (!g) return;
+  const duplicateGraph = async () => {
+    if (!graphId) return;
+    const g = await resolveResult(graphs.get(graphId));
+    if (!g) return;
     const copy: GraphDoc = { ...g, id: id(), name: `${g.name} (copy)`, createdAt: now(), updatedAt: now() };
-    graphs.upsert(copy); setGraphList(graphs.listByClient(copy.clientId)); setGraphId(copy.id);
+    await resolveResult(graphs.upsert(copy));
+    const updatedGraphs = await resolveResult(graphs.listByClient(copy.clientId));
+    setGraphList(updatedGraphs);
+    setGraphId(copy.id);
   };
-  const deleteGraph = () => {
+  const deleteGraph = async () => {
     if (!graphId) return; if (!confirm('Delete graph?')) return;
-    const g = graphs.get(graphId); if (!g) return;
-    graphs.remove(graphId);
-    const gs = graphs.listByClient(g.clientId); setGraphList(gs); setGraphId(gs[0]?.id ?? null);
+    const g = await resolveResult(graphs.get(graphId));
+    if (!g) return;
+    await resolveResult(graphs.remove(graphId));
+    const gs = await resolveResult(graphs.listByClient(g.clientId));
+    setGraphList(gs);
+    setGraphId(gs[0]?.id ?? null);
   };
 
   // keyboard shortcuts (keep existing) for layout + SVG
@@ -300,6 +436,32 @@ export default function App() {
         <GraphCanvas elements={elements} positions={positions} viewport={graphId ? graphs.get(graphId)?.viewport : undefined} onPositions={(p) => setPositions(p)} cyRef={cyRef} />
       </div>
       <Toast show={saved} text="Saved" />
+      {parseError && (
+        <div style={{
+          position: 'fixed',
+          bottom: '20px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          background: '#ef4444',
+          color: 'white',
+          padding: '12px 24px',
+          borderRadius: '8px',
+          boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)',
+          maxWidth: '600px',
+          zIndex: 1000,
+          display: 'flex',
+          alignItems: 'center',
+          gap: '12px'
+        }}>
+          <span style={{ fontSize: '18px' }}>⚠️</span>
+          <div>
+            <strong>Parse Error:</strong> {parseError}
+            <div style={{ fontSize: '12px', marginTop: '4px', opacity: 0.9 }}>
+              Fix the syntax to update the visualization
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
